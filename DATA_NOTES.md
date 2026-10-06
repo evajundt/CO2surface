@@ -34,3 +34,20 @@ Quality filtering applied to SOCAT: WOCE flag 2 and cruise QC flag A-D
 (SOCAT's recommendation for accuracy better than 5 uatm). fCO2 is converted
 to pCO2 with Weiss (1974), which reproduces the ship file's own conversion
 (364.8 -> 366.0 uatm).
+
+## socat_nwgom.tsv.gz (SOCAT v2026, subset of socat_netcdf.nc)
+Made with `subset_socat.py` from the SOCAT v2026 DSG NetCDF (340,448
+measurements, 153 cruises, 2003-2025), cut to DOMAIN + 0.5 degrees.
+Uploaded to the repo root and moved into `data/raw/` by Claude.
+
+| Item | Value / handling |
+|---|---|
+| Rows in file | 95,894 (all already WOCE flag 2) |
+| Dropped by QC flag A-D filter | 3,270 (cruise QC flag E) |
+| Points inside DOMAIN | 75,610 from 63 cruises, 19 distinct years |
+| Coverage | 71% of 0.25-degree cells, 60% of 0.1-degree cells |
+| Southern edge | No data south of ~26.4N, so the download was likely limited there; the domain goes to 25.8N |
+| **Seasonal imbalance** | 47% of points are from September and 20% from August; Jan, Apr, Nov have 2 cruises each. Location and season are partly confounded, so season must be removed before testing location. |
+| **Long-term trend** | 2003-2025 span; ocean pCO2 rises ~1.5-2 uatm/yr, so ~40 uatm over the record. Must be removed too. |
+| Salinity < 25 | 2,476 of 75,596 points |
+| Missing Temp / Sal | 6 / 14 points |

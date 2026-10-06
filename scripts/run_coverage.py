@@ -1,7 +1,7 @@
 """
 Run the coverage diagnostic on everything currently available.
 
-    python scripts/run_coverage.py                      # uses data/raw/socat head.csv
+    python scripts/run_coverage.py                      # uses data/raw/socat_nwgom.tsv.gz
     python scripts/run_coverage.py --socat data/raw/<full_socat_export>.tsv
 
 Writes a coverage map to outputs/coverage_map.png.
@@ -27,7 +27,7 @@ OUT = ROOT / "outputs"
 # File names as uploaded to the repo (spaces included)
 SHIP_FILE = RAW / "shipto2023.xlsx"
 LOGGER_FILE = RAW / "Temp E_W_1989-2024_1sheet.xlsx"
-SOCAT_DEFAULT = RAW / "socat head.csv"
+SOCAT_DEFAULT = RAW / "socat_nwgom.tsv.gz"   # SOCAT v2026 subset (was "socat head.csv")
 
 
 def nearest_neighbour_km(df):
