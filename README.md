@@ -9,6 +9,10 @@ Mexican border, extended east to include the Flower Garden Banks).
 - `scripts/nwgom_coverage_check.py` – domain definition + `coverage_report()`
 - `scripts/run_coverage.py` – runs the coverage check on all sources, saves `outputs/coverage_map.png`
 - `scripts/subset_socat.py` – cuts a large SOCAT download (.tsv/.csv or NetCDF .nc) to the NW Gulf box (+0.5°) so it fits on GitHub (website upload limit 25 MB, so write .tsv.gz); `--info` prints the file layout
+- `scripts/spatial_grouping.py` – the planned two-stage analysis: Moran's I + LISA on de-seasoned
+  anomalies (all data), salinity justification tests, then freshwater removal (S < 25/30/33) and
+  LOWESS salinity adjustment, plus a cruise-centred check; compares them (Cohen's kappa).
+  Results in `outputs/spatial_<cell>deg/report.md`
 - `DATA_NOTES.md` – log of problems found in each raw file and how they're handled
 
 Raw data lives in `data/raw/`:
@@ -21,5 +25,7 @@ Raw data lives in `data/raw/`:
 pip install -r requirements.txt
 python scripts/run_coverage.py                                   # uses socat head.csv
 python scripts/subset_socat.py <full_socat_file> data/raw/socat_nwgom.tsv.gz
-python scripts/run_coverage.py --socat data/raw/socat_nwgom.tsv.gz  # once the full file is in
+python scripts/run_coverage.py
+python scripts/spatial_grouping.py                 # 0.1-degree cells
+python scripts/spatial_grouping.py --cell 0.25     # coarser sensitivity run
 ```

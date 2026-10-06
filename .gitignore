@@ -1,3 +1,5 @@
-outputs/
+outputs/*
+!outputs/spatial_*/
+!outputs/coverage_map.png
 __pycache__/
 *.pyc
