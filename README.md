@@ -8,7 +8,7 @@ Mexican border, extended east to include the Flower Garden Banks).
   (`Date, Latitude, Longitude, Temp, pCO2, Source, Station`)
 - `scripts/nwgom_coverage_check.py` – domain definition + `coverage_report()`
 - `scripts/run_coverage.py` – runs the coverage check on all sources, saves `outputs/coverage_map.png`
-- `scripts/subset_socat.py` – cuts a large SOCAT download to the NW Gulf box (+0.5°) so it fits on GitHub
+- `scripts/subset_socat.py` – cuts a large SOCAT download (.tsv/.csv or NetCDF .nc) to the NW Gulf box (+0.5°) so it fits on GitHub; `--info` prints the file layout
 - `DATA_NOTES.md` – log of problems found in each raw file and how they're handled
 
 Raw data lives in `data/raw/`:
@@ -18,7 +18,7 @@ Raw data lives in `data/raw/`:
 
 ## Run
 ```
-pip install pandas numpy scipy matplotlib openpyxl
+pip install -r requirements.txt
 python scripts/run_coverage.py                                   # uses socat head.csv
 python scripts/subset_socat.py <full_socat_file> data/raw/socat_nwgom.tsv
 python scripts/run_coverage.py --socat data/raw/socat_nwgom.tsv  # once the full file is in

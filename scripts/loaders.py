@@ -146,8 +146,97 @@ def _read_header_index(path, max_lines=10_000):
     raise ValueError(f"No header line with latitude/longitude found in {path}")
 
 
+NETCDF_SUFFIXES = (".nc", ".nc4", ".netcdf", ".cdf")
+
+
+def _is_netcdf(path):
+    return str(path).lower().endswith(NETCDF_SUFFIXES)
+
+
+def _decode_text(values):
+    """NetCDF char/bytes variables (Expocode, QC flag) -> plain strings."""
+    arr = np.asarray(values)
+    if arr.dtype.kind == "S":
+        return np.char.decode(arr, "utf-8", errors="replace").astype(str)
+    if arr.dtype.kind == "O":
+        return np.array([v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+                         for v in arr])
+    return arr
+
+
+def _netcdf_layout(ds):
+    """
+    Work out how a SOCAT NetCDF file is laid out.
+
+    Returns (obs_dim, traj_dim, row_size_var). SOCAT's full-resolution NetCDF
+    from ERDDAP is a CF 'contiguous ragged array': cruise-level variables
+    (Expocode, QC flag) sit on a 'trajectory' dimension and each cruise's
+    measurements are stored back to back on an 'obs' dimension, with
+    rowSize saying how many belong to each cruise. A flat table (one
+    dimension) is also handled.
+    """
+    lat_name = _find_col(list(ds.variables), _SOCAT_CANDIDATES["lat"])
+    lon_name = _find_col(list(ds.variables), _SOCAT_CANDIDATES["lon"])
+    if lat_name is None or lon_name is None:
+        raise ValueError(f"No latitude/longitude variables in NetCDF: {list(ds.variables)}")
+    lat_dims = ds[lat_name].dims
+    # Gridded product: latitude and longitude are separate axes of a grid.
+    if len(lat_dims) == 1 and lat_dims[0] == lat_name and ds[lon_name].dims == (lon_name,):
+        raise ValueError(
+            "This looks like the GRIDDED SOCAT product (1-degree monthly means). "
+            "It is too coarse for shelf-scale clustering; download the "
+            "full-resolution (per-measurement) data instead.")
+    if len(lat_dims) != 1:
+        raise ValueError(f"Unexpected latitude dimensions {lat_dims}")
+    obs_dim = lat_dims[0]
+    row_size = next((v for v in ds.variables
+                     if v.lower() in ("rowsize", "row_size")), None)
+    traj_dim = ds[row_size].dims[0] if row_size is not None else None
+    return obs_dim, traj_dim, row_size
+
+
+def _netcdf_to_frame(ds, obs_index=None):
+    """
+    Flatten a SOCAT NetCDF dataset to one row per measurement.
+
+    obs_index: optional integer array of measurements to keep. Only those are
+    read from disk, so a subset of a multi-GB file stays small in memory.
+    """
+    obs_dim, traj_dim, row_size = _netcdf_layout(ds)
+    n_obs = ds.sizes[obs_dim]
+    idx = np.arange(n_obs) if obs_index is None else np.asarray(obs_index)
+
+    traj_of_obs = None
+    if row_size is not None:
+        # cruise number for each measurement, from rowSize
+        traj_of_obs = np.repeat(np.arange(ds.sizes[traj_dim]),
+                                ds[row_size].values.astype(int))[idx]
+
+    cols = {}
+    for name, var in ds.variables.items():
+        if var.ndim == 1 and var.dims[0] == obs_dim and name != obs_dim:
+            cols[name] = _decode_text(var.isel({obs_dim: idx}).values)
+        elif (traj_of_obs is not None and var.ndim == 1 and var.dims[0] == traj_dim
+              and name != row_size):
+            cols[name] = _decode_text(var.values)[traj_of_obs]
+        elif var.ndim == 2 and var.dims[0] in (obs_dim, traj_dim) and var.dtype.kind == "S":
+            # fixed-width char arrays, e.g. expocode(trajectory, string_length)
+            joined = np.array([b"".join(r).strip(b"\x00 ") for r in var.values])
+            vals = _decode_text(joined)
+            cols[name] = vals[idx] if var.dims[0] == obs_dim else vals[traj_of_obs]
+    return pd.DataFrame(cols)
+
+
+def _read_socat_netcdf(path):
+    import xarray as xr  # only needed for NetCDF input
+    with xr.open_dataset(path, mask_and_scale=True) as ds:
+        return _netcdf_to_frame(ds)
+
+
 def _read_socat_table(path):
     """Read a SOCAT text file, skipping the metadata block above the header."""
+    if _is_netcdf(path):
+        return _read_socat_netcdf(path)
     header_idx, sep = _read_header_index(path)
     # Read everything as text first: Expocodes and QC flags must stay strings.
     df = pd.read_csv(path, sep=sep, skiprows=header_idx, dtype=str, low_memory=False)
@@ -198,8 +287,8 @@ def fco2_to_pco2(fco2, sst_c, p_atm=1.0):
 
 def load_socat(path, good_flags=(2,), good_qc=SOCAT_GOOD_QC):
     """
-    Load a SOCAT extract (Data Set Viewer .tsv, synthesis file, ERDDAP .csv,
-    or the upper-case CSV export used for 'socat head.csv').
+    Load a SOCAT extract: Data Set Viewer .tsv, synthesis file, ERDDAP .csv,
+    the upper-case CSV export used for 'socat head.csv', or NetCDF (.nc).
 
       * -1E+34 fill values become NaN
       * SOCAT stores longitude as 0-360 E in some exports; converted to -180..180

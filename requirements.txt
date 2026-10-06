@@ -1,0 +1,10 @@
+pandas
+numpy
+scipy
+matplotlib
+openpyxl
+xarray
+netCDF4
+esda
+libpysal
+statsmodels

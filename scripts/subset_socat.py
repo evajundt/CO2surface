@@ -3,8 +3,12 @@ Cut a large SOCAT download down to the NW Gulf box so it is small enough to
 put on GitHub (GitHub rejects files over 100 MB).
 
     python scripts/subset_socat.py <big_socat_file> data/raw/socat_nwgom.tsv
+    python scripts/subset_socat.py --info <big_socat_file>   # print layout only
 
-* Reads the file in chunks, so it works on multi-GB downloads.
+* Works on text (.tsv/.csv) and NetCDF (.nc) downloads; output is always
+  tab-separated text.
+* Text is read in chunks; for NetCDF only latitude/longitude are read in
+  full, then just the rows inside the box. Either way multi-GB files work.
 * Keeps every column and writes text straight through: do NOT open the
   result in Excel before uploading, or Expocodes like 316420090512 get turned
   into '3.16E+11' and separate cruises merge into one.
@@ -14,15 +18,39 @@ put on GitHub (GitHub rejects files over 100 MB).
 
 import sys
 
+import numpy as np
 import pandas as pd
 
-from loaders import _find_col, _read_header_index, _SOCAT_CANDIDATES
+from loaders import (_SOCAT_CANDIDATES, _find_col, _is_netcdf, _netcdf_layout,
+                     _netcdf_to_frame, _read_header_index)
 from nwgom_coverage_check import DOMAIN
 
 BUFFER_DEG = 0.5
 
 
+def _in_box(lon, lat):
+    lon = lon.where(lon <= 180, lon - 360)
+    return (lon.between(DOMAIN["lon_min"] - BUFFER_DEG, DOMAIN["lon_max"] + BUFFER_DEG) &
+            lat.between(DOMAIN["lat_min"] - BUFFER_DEG, DOMAIN["lat_max"] + BUFFER_DEG))
+
+
+def subset_netcdf(src, dst):
+    import xarray as xr
+    with xr.open_dataset(src) as ds:
+        obs_dim, _, _ = _netcdf_layout(ds)
+        lon_v = _find_col(list(ds.variables), _SOCAT_CANDIDATES["lon"])
+        lat_v = _find_col(list(ds.variables), _SOCAT_CANDIDATES["lat"])
+        lon = pd.Series(ds[lon_v].values.astype(float))
+        lat = pd.Series(ds[lat_v].values.astype(float))
+        idx = np.flatnonzero(_in_box(lon, lat).to_numpy())
+        print(f"kept {len(idx):,} of {ds.sizes[obs_dim]:,} measurements")
+        _netcdf_to_frame(ds, obs_index=idx).to_csv(dst, sep="\t", index=False)
+    print(f"-> {dst}")
+
+
 def subset(src, dst, chunksize=200_000):
+    if _is_netcdf(src):
+        return subset_netcdf(src, dst)
     header_idx, sep = _read_header_index(src)
     reader = pd.read_csv(src, sep=sep, skiprows=header_idx, dtype=str,
                          chunksize=chunksize, low_memory=False)
@@ -30,13 +58,11 @@ def subset(src, dst, chunksize=200_000):
     first = True
     for chunk in reader:
         chunk = chunk.dropna(how="all")
-        lon_c = _find_col(chunk.columns, _SOCAT_CANDIDATES["lon"])
-        lat_c = _find_col(chunk.columns, _SOCAT_CANDIDATES["lat"])
-        lon = pd.to_numeric(chunk[lon_c], errors="coerce")
-        lon = lon.where(lon <= 180, lon - 360)
-        lat = pd.to_numeric(chunk[lat_c], errors="coerce")
-        keep = (lon.between(DOMAIN["lon_min"] - BUFFER_DEG, DOMAIN["lon_max"] + BUFFER_DEG) &
-                lat.between(DOMAIN["lat_min"] - BUFFER_DEG, DOMAIN["lat_max"] + BUFFER_DEG))
+        lon = pd.to_numeric(chunk[_find_col(chunk.columns, _SOCAT_CANDIDATES["lon"])],
+                            errors="coerce")
+        lat = pd.to_numeric(chunk[_find_col(chunk.columns, _SOCAT_CANDIDATES["lat"])],
+                            errors="coerce")
+        keep = _in_box(lon, lat)
         n_in += len(chunk)
         n_out += int(keep.sum())
         chunk[keep].to_csv(dst, sep="\t", index=False, mode="w" if first else "a",
@@ -45,7 +71,22 @@ def subset(src, dst, chunksize=200_000):
     print(f"kept {n_out:,} of {n_in:,} rows -> {dst}")
 
 
+def info(src):
+    """Print the file's variables and dimensions (small enough to paste into chat)."""
+    if _is_netcdf(src):
+        import xarray as xr
+        with xr.open_dataset(src) as ds:
+            print(ds)
+            print("\nlayout (obs_dim, trajectory_dim, rowSize):", _netcdf_layout(ds))
+    else:
+        header_idx, sep = _read_header_index(src)
+        print(pd.read_csv(src, sep=sep, skiprows=header_idx, nrows=5).T)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) == 3 and sys.argv[1] == "--info":
+        info(sys.argv[2])
+    elif len(sys.argv) == 3:
+        subset(sys.argv[1], sys.argv[2])
+    else:
         sys.exit(__doc__)
-    subset(sys.argv[1], sys.argv[2])
