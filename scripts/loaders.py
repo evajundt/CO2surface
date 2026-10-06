@@ -1,20 +1,19 @@
 """
 Loaders that turn each raw source into one common surface-point table:
 
-    Date | Latitude | Longitude | Temp | pCO2 | Source | Station
+    Date | Latitude | Longitude | Temp | Sal | pCO2 | Source | Station
 
 All sources end up with the same column names, so the coverage check and
 the later Moran's I / LISA steps can be run on any one of them or on all
 of them stacked together.
 """
 
-import io
 import re
 
 import numpy as np
 import pandas as pd
 
-COMMON_COLS = ["Date", "Latitude", "Longitude", "Temp", "pCO2", "Source", "Station"]
+COMMON_COLS = ["Date", "Latitude", "Longitude", "Temp", "Sal", "pCO2", "Source", "Station"]
 FILL_VALUES = [-999, -999.0, 999, 999.0, -9999, -99]
 
 
@@ -45,6 +44,7 @@ def load_ship(path, depth="S"):
         "Latitude": raw["Latitude"],
         "Longitude": lon,
         "Temp": raw["CTD temp"],
+        "Sal": raw["CTD Sal"],
         "pCO2": raw["pCO2"],
         "Source": "Ship",
         "Station": raw["Station"].astype(str).str.strip(),
@@ -85,6 +85,7 @@ def load_reef_loggers(path):
             "Latitude": meta["Latitude"],
             "Longitude": meta["Longitude"],
             "Temp": d[meta["temp_col"]].astype(float),
+            "Sal": np.nan,
             "pCO2": np.nan,
             "Source": "ReefLogger",
             "Station": site,
@@ -96,16 +97,28 @@ def load_reef_loggers(path):
 # SOCAT
 # ---------------------------------------------------------------------------
 # Column names differ between the SOCAT synthesis files, the Data Set Viewer
-# export and the ERDDAP export. The first match in each list is used.
+# export and the ERDDAP export. The first match in each list is used, and
+# matching ignores upper/lower case.
 _SOCAT_CANDIDATES = {
     "lon":  [r"^longitude", r"^lon"],
     "lat":  [r"^latitude", r"^lat"],
-    "sst":  [r"^SST", r"^temp", r"^sea_surface_temp"],
+    "sst":  [r"^SST", r"^temp$", r"^temp\b", r"^sea_surface_temp"],
     "sal":  [r"^sal", r"^SSS"],
-    "fco2": [r"^fCO2rec", r"^fCO2_rec", r"^fco2_recommended", r"^fCO2"],
+    # (?![_a-z]) stops fCO2rec from matching fCO2rec_flag / fCO2rec_src
+    "fco2": [r"^fCO2rec(?![_a-z])", r"^fco2_recommended", r"^fCO2_rec(?![_a-z])"],
     "flag": [r"^fCO2rec_flag", r"^WOCE_CO2_water", r"^fCO2_flag"],
-    "time": [r"^time$", r"^date"],
+    "qc":   [r"^QC_flag"],
+    "expo": [r"^expocode"],
+    "time": [r"^time$", r"^datetime$", r"^date$"],
 }
+
+# SOCAT writes missing values as -1E+34 (NetCDF fill). Anything below this
+# threshold is treated as missing.
+SOCAT_FILL_THRESHOLD = -1e30
+
+# SOCAT's own recommendation: cruise QC flags A-D are fit for most uses
+# (accuracy better than 5 uatm). E (accuracy 5-10 uatm) is left out by default.
+SOCAT_GOOD_QC = ("A", "B", "C", "D")
 
 
 def _find_col(columns, patterns):
@@ -116,24 +129,59 @@ def _find_col(columns, patterns):
     return None
 
 
+def _read_header_index(path, max_lines=10_000):
+    """
+    Find the header line (SOCAT files can have a long metadata block above
+    it) and the delimiter, streaming line by line so large files are never
+    loaded whole.
+    """
+    with open(path, "r", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            low = line.lower()
+            if low.startswith("expocode") or ("latitude" in low and "longitude" in low):
+                sep = "\t" if line.count("\t") >= line.count(",") else ","
+                return i, sep
+            if i >= max_lines:
+                break
+    raise ValueError(f"No header line with latitude/longitude found in {path}")
+
+
 def _read_socat_table(path):
     """Read a SOCAT text file, skipping the metadata block above the header."""
-    with open(path, "r", errors="replace") as fh:
-        lines = fh.readlines()
-    header_idx = 0
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if low.startswith("expocode") or ("latitude" in low and "longitude" in low):
-            header_idx = i
-            break
-    header = lines[header_idx]
-    sep = "\t" if header.count("\t") >= header.count(",") else ","
-    df = pd.read_csv(io.StringIO("".join(lines[header_idx:])), sep=sep,
-                     low_memory=False)
+    header_idx, sep = _read_header_index(path)
+    # Read everything as text first: Expocodes and QC flags must stay strings.
+    df = pd.read_csv(path, sep=sep, skiprows=header_idx, dtype=str, low_memory=False)
+    # Fix: files saved from Excel carry many fully blank trailing rows
+    # (",,,,,"); the 'socat head.csv' sample had ~142k of them.
+    df = df.dropna(how="all")
     # ERDDAP CSVs carry a units row directly under the header
     if len(df) and pd.to_numeric(df.iloc[0], errors="coerce").isna().all():
-        df = df.iloc[1:].reset_index(drop=True)
-    return df
+        df = df.iloc[1:]
+    return df.reset_index(drop=True)
+
+
+def _socat_dates(df):
+    """
+    Build timestamps from the separate year/month/day/hour/minute/second
+    columns when present (case-insensitive), because the combined DATETIME
+    column is often reformatted by Excel (e.g. '5/12/2009 18:17').
+    """
+    lower = {str(c).lower(): c for c in df.columns}
+    parts = {"year": ["year", "yr"], "month": ["month", "mon"], "day": ["day"],
+             "hour": ["hour", "hh"], "minute": ["minute", "mm"], "second": ["second", "ss"]}
+    found = {}
+    for key, names in parts.items():
+        for n in names:
+            if n in lower:
+                found[key] = pd.to_numeric(df[lower[n]], errors="coerce")
+                break
+    if {"year", "month", "day"} <= found.keys():
+        return pd.to_datetime(pd.DataFrame(found), errors="coerce")
+    tcol = _find_col(df.columns, _SOCAT_CANDIDATES["time"])
+    if tcol is None:
+        raise ValueError("No date information found in SOCAT file")
+    t = pd.to_datetime(df[tcol], errors="coerce", utc=True)
+    return t.dt.tz_localize(None)
 
 
 def fco2_to_pco2(fco2, sst_c, p_atm=1.0):
@@ -148,13 +196,16 @@ def fco2_to_pco2(fco2, sst_c, p_atm=1.0):
     return np.asarray(fco2, dtype=float) / np.exp(p_atm * (B + 2 * delta) / (R * T))
 
 
-def load_socat(path, good_flags=(2,)):
+def load_socat(path, good_flags=(2,), good_qc=SOCAT_GOOD_QC):
     """
-    Load a SOCAT extract (Data Set Viewer .tsv, synthesis file or ERDDAP .csv).
+    Load a SOCAT extract (Data Set Viewer .tsv, synthesis file, ERDDAP .csv,
+    or the upper-case CSV export used for 'socat head.csv').
 
-      * SOCAT stores longitude as 0-360 E; converted to -180..180
-      * keeps only WOCE flag 2 (good) fCO2 when a flag column is present
-      * converts fCO2rec to pCO2 with fco2_to_pco2()
+      * -1E+34 fill values become NaN
+      * SOCAT stores longitude as 0-360 E in some exports; converted to -180..180
+      * keeps only WOCE flag 2 (good) fCO2 and cruise QC flags A-D
+      * drops rows with no fCO2 or fCO2 <= 0
+      * converts fCO2 to pCO2 with fco2_to_pco2()
     """
     df = _read_socat_table(path)
     cols = {k: _find_col(df.columns, v) for k, v in _SOCAT_CANDIDATES.items()}
@@ -163,31 +214,45 @@ def load_socat(path, good_flags=(2,)):
         raise ValueError(f"Could not find SOCAT columns {missing}. "
                          f"Columns present: {list(df.columns)}")
 
-    for k in ("lon", "lat", "sst", "fco2", "flag"):
+    for k in ("lon", "lat", "sst", "sal", "fco2", "flag"):
         if cols[k] is not None:
-            df[cols[k]] = pd.to_numeric(df[cols[k]], errors="coerce")
+            x = pd.to_numeric(df[cols[k]], errors="coerce")
+            df[cols[k]] = x.where(x > SOCAT_FILL_THRESHOLD)
 
+    n0 = len(df)
+    log = [f"{n0} rows read"]
     if cols["flag"] is not None and good_flags:
-        before = len(df)
         df = df[df[cols["flag"]].isin(good_flags)]
-        print(f"[socat] kept {len(df)}/{before} rows with flag in {good_flags}")
+        log.append(f"{len(df)} with WOCE flag in {good_flags}")
+    if cols["qc"] is not None and good_qc:
+        df = df[df[cols["qc"]].astype(str).str.strip().str.upper().isin(good_qc)]
+        log.append(f"{len(df)} with QC flag in {''.join(good_qc)}")
+    df = df[df[cols["fco2"]] > 0]
+    log.append(f"{len(df)} with fCO2 > 0")
+    print("[socat] " + " -> ".join(log))
 
-    if cols["time"] is not None:
-        date = pd.to_datetime(df[cols["time"]], errors="coerce", utc=True).dt.tz_localize(None)
+    if cols["expo"] is not None:
+        station = df[cols["expo"]].astype(str).str.strip()
+        # Fix: Excel turns numeric-looking Expocodes (e.g. 316420090512) into
+        # scientific notation like '3.16E+11', which merges separate cruises
+        # under one ID. They can't be recovered from the file, so flag them.
+        mangled = station.str.contains(r"E\+\d+$", regex=True)
+        if mangled.any():
+            print(f"[socat] WARNING: {int(mangled.sum())} rows have Expocodes in "
+                  f"scientific notation ({sorted(station[mangled].unique())}); "
+                  f"Excel mangled them. Re-download without opening in Excel "
+                  f"to keep cruise IDs.")
     else:
-        parts = {k: pd.to_numeric(df[k], errors="coerce")
-                 for k in ("yr", "mon", "day") if k in df.columns}
-        date = pd.to_datetime(pd.DataFrame({"year": parts["yr"], "month": parts["mon"],
-                                            "day": parts["day"]}), errors="coerce")
+        station = "SOCAT"
 
     lon = df[cols["lon"]].where(df[cols["lon"]] <= 180, df[cols["lon"]] - 360)
-    station = df["Expocode"].astype(str) if "Expocode" in df.columns else "SOCAT"
 
     out = pd.DataFrame({
-        "Date": date,
+        "Date": _socat_dates(df),
         "Latitude": df[cols["lat"]],
         "Longitude": lon,
         "Temp": df[cols["sst"]],
+        "Sal": df[cols["sal"]] if cols["sal"] is not None else np.nan,
         "pCO2": fco2_to_pco2(df[cols["fco2"]], df[cols["sst"]]),
         "Source": "SOCAT",
         "Station": station,
