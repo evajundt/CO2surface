@@ -8,6 +8,7 @@ the later Moran's I / LISA steps can be run on any one of them or on all
 of them stacked together.
 """
 
+import gzip
 import re
 
 import numpy as np
@@ -135,7 +136,10 @@ def _read_header_index(path, max_lines=10_000):
     it) and the delimiter, streaming line by line so large files are never
     loaded whole.
     """
-    with open(path, "r", errors="replace") as fh:
+    # .gz files (written by subset_socat.py to stay under GitHub's upload
+    # limit) are read transparently.
+    opener = gzip.open if str(path).lower().endswith(".gz") else open
+    with opener(path, "rt", errors="replace") as fh:
         for i, line in enumerate(fh):
             low = line.lower()
             if low.startswith("expocode") or ("latitude" in low and "longitude" in low):

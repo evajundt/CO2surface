@@ -1,12 +1,14 @@
 """
 Cut a large SOCAT download down to the NW Gulf box so it is small enough to
-put on GitHub (GitHub rejects files over 100 MB).
+put on GitHub. Uploading through the GitHub website is limited to 25 MB per
+file (100 MB via git push), so write a gzip-compressed .tsv.gz:
 
-    python scripts/subset_socat.py <big_socat_file> data/raw/socat_nwgom.tsv
+    python scripts/subset_socat.py <big_socat_file> data/raw/socat_nwgom.tsv.gz
     python scripts/subset_socat.py --info <big_socat_file>   # print layout only
 
 * Works on text (.tsv/.csv) and NetCDF (.nc) downloads; output is always
-  tab-separated text.
+  tab-separated text, gzip-compressed when the output name ends in .gz
+  (typically 5-10x smaller; the loaders read .gz directly).
 * Text is read in chunks; for NetCDF only latitude/longitude are read in
   full, then just the rows inside the box. Either way multi-GB files work.
 * Keeps every column and writes text straight through: do NOT open the
@@ -46,6 +48,7 @@ def subset_netcdf(src, dst):
         print(f"kept {len(idx):,} of {ds.sizes[obs_dim]:,} measurements")
         _netcdf_to_frame(ds, obs_index=idx).to_csv(dst, sep="\t", index=False)
     print(f"-> {dst}")
+    _report_size(dst)
 
 
 def subset(src, dst, chunksize=200_000):
@@ -69,6 +72,16 @@ def subset(src, dst, chunksize=200_000):
                            header=first)
         first = False
     print(f"kept {n_out:,} of {n_in:,} rows -> {dst}")
+    _report_size(dst)
+
+
+def _report_size(dst):
+    import os
+    mb = os.path.getsize(dst) / 1e6
+    note = ("OK for website upload" if mb < 25 else
+            "too big for website upload (25 MB); use a .gz name or git push" if mb < 100 else
+            "too big for GitHub (100 MB); tell Claude")
+    print(f"file size: {mb:.1f} MB - {note}")
 
 
 def info(src):
