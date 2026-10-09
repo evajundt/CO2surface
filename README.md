@@ -15,7 +15,11 @@ Mexican border, extended east to include the Flower Garden Banks).
   Results in `outputs/spatial_<cell>deg/report.md`
 - `scripts/seasonal.py` – Eva's `compute_seasonal_trend_gam` (pyGAM, cyclic DOY + time spline) adapted for
   the spatial analysis; changes from the original are listed at the top of the file
-- `reference/fianlch3analysis.py` – Eva's original ch3 analysis script, kept unchanged for reference
+- `scripts/ch3_trends.py` – per-year long-term trends for the ch3 datasets (ship surface, HOBO East/West),
+  replacing the per-sample slopes from `plot_anomaly_with_trend`; writes `outputs/ch3_trends/`
+- `reference/fianlch3analysis.py` – Eva's ch3 analysis script. Edits are marked `CHANGED (Claude)`,
+  `UNCOMMENTED (Claude)` or `NOTE (Claude)`: RMSE call updated for scikit-learn 1.6+, the
+  east/west/stetson and df_east trend lines uncommented, and the trend-unit issues flagged
 - `DATA_NOTES.md` – log of problems found in each raw file and how they're handled
 
 Raw data lives in `data/raw/`:
@@ -33,4 +37,5 @@ python scripts/spatial_grouping.py                 # 0.1-degree cells
 python scripts/spatial_grouping.py --cell 0.25     # coarser sensitivity run
 python scripts/spatial_grouping.py --seasonal harmonic   # earlier simple seasonal fit, for comparison
 python scripts/spatial_grouping.py --iqr-clean           # also drop 3x-IQR anomaly outliers
+python scripts/ch3_trends.py                              # per-year ch3 trends
 ```

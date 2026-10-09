@@ -24,7 +24,9 @@ import pymannkendall as mk
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler as stsc
 from sklearn.preprocessing import PolynomialFeatures
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+# CHANGED (Claude): mean_squared_error(..., squared=False) was removed in scikit-learn 1.6;
+# root_mean_squared_error (scikit-learn >= 1.4) gives the same RMSE.
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 from sklearn.ensemble import RandomForestRegressor
 from scipy import stats
 import matplotlib.ticker as ticker
@@ -35,6 +37,12 @@ def compute_seasonal_trend_gam(df, col, date_col='Date', window=15):
     dfog[date_col] = pd.to_datetime(dfog[date_col])
     dfog = dfog.sort_values(date_col).reset_index(drop=True)
     dfog['_doy'] = dfog[date_col].dt.dayofyear
+    # NOTE (Claude): time is the row number after sorting, not real time, so
+    # years with many samples are stretched and gaps (e.g. 2019, 2023) vanish.
+    # The time spline also absorbs the long-term trend, so Anomaly_<col> has
+    # no trend left in it. Each call also drops rows where <col> is missing,
+    # so chained calls keep only rows complete in every variable.
+    # Fixed version: scripts/seasonal.py.
     dfog['_time_index'] = np.arange(len(dfog))
     # Remove NaN and Inf before fitting
     valid_mask = dfog[col].notna() & np.isfinite(dfog[col])
@@ -115,6 +123,10 @@ def compute_seasonal_trend(df, col, date_col='Date', window=15):
     # 3. FIT LINEAR TREND TO ANOMALY SERIES
     # ------------------------------------------------------------------ #
     valid = df[f'Anomaly_{col}'].notna()
+    # NOTE (Claude): x = np.arange(...) is the ROW NUMBER, so this slope is
+    # "per sample", not per year. With irregular sampling it cannot be
+    # converted by multiplying (HOBO West: x365.25 gives +0.070 C/yr, the
+    # true slope is +0.046 C/yr). Per-year versions: scripts/seasonal.py.
     x = np.arange(len(df))
     slope, intercept, r_value, p_value, std_err = stats.linregress(
         x[valid], df.loc[valid, f'Anomaly_{col}']
@@ -311,7 +323,7 @@ def spline_model_analysis(df, xvars, yvar, datevar, degree=3, n_knots=5, label=N
     print(f"Number of samples: {len(dft)}")
     print(f"R²: {r2_score(y, y_pred):.3f}")
     print(f"MAE: {mean_absolute_error(y, y_pred):.3f}")
-    print(f"RMSE: {mean_squared_error(y, y_pred, squared=False):.3f}")
+    print(f"RMSE: {root_mean_squared_error(y, y_pred):.3f}")  # CHANGED (Claude): was mean_squared_error(..., squared=False)
     print("Coefficients:", model.coef_)
     print(f"Intercept: {model.intercept_:.3f}")
     print("-"*30)
@@ -361,7 +373,7 @@ def rf_model_analysis(df, xvars, yvar, datevar, n_estimators=100, max_depth=None
     print(f"Number of samples: {len(dft)}")
     print(f"R²: {r2_score(y, y_pred):.3f}")
     print(f"MAE: {mean_absolute_error(y, y_pred):.3f}")
-    print(f"RMSE: {mean_squared_error(y, y_pred, squared=False):.3f}")
+    print(f"RMSE: {root_mean_squared_error(y, y_pred):.3f}")  # CHANGED (Claude): was mean_squared_error(..., squared=False)
     print("Feature importances:", model.feature_importances_)
     print("-"*30)
     dft = dft.copy()
@@ -419,7 +431,7 @@ def poly_model_analysis(df, xvar, yvar, datevar, degree=2, label=None):
     print(f"Number of samples: {len(dft)}")
     print(f"R²: {r2_score(y, y_pred):.3f}")
     print(f"MAE: {mean_absolute_error(y, y_pred):.3f}")
-    print(f"RMSE: {mean_squared_error(y, y_pred, squared=False):.3f}")
+    print(f"RMSE: {root_mean_squared_error(y, y_pred):.3f}")  # CHANGED (Claude): was mean_squared_error(..., squared=False)
     print("Coefficients:", model.coef_)
     print(f"Intercept: {model.intercept_:.3f}")
     print("-"*30)
@@ -493,6 +505,13 @@ def plot_anomaly_with_trend(df, anomaly_var, date_col='Date', title=None):
     
     # Drop missing values
     temp_df = df[[date_col, anomaly_var]].dropna()
+    # NOTE (Claude): x = np.arange(...) is the ROW NUMBER, so this slope is
+    # "per sample", not per year. With irregular sampling it cannot be
+    # converted by multiplying (HOBO West: x365.25 gives +0.070 C/yr, the
+    # true slope is +0.046 C/yr). Per-year versions: scripts/seasonal.py.
+    # ALSO: on Anomaly_ columns from compute_seasonal_trend_gam the slope is
+    # ~0 by construction (p = 1.00), because the GAM's time spline already
+    # removed the trend. Use seasonal.long_term_trend for the chapter trends.
     x = np.arange(len(temp_df))
     y = temp_df[anomaly_var].values
 
@@ -643,17 +662,23 @@ for col in [hobo_east, hobo_west]:
     print("\nColumn names:", list(col.columns))
     print("\nNumber of datapoints:", len(col))
 # %%  Apply Trend Calculations to Each Dataset
-# east = compute_seasonal_trend_gam(east, 'temp')
-# east = compute_seasonal_trend(east, 'sal')
-# east = compute_seasonal_trend(east, 'pco2')
+# UNCOMMENTED (Claude): these create the SeasonalTrend_*/Anomaly_* columns
+# that the Mann-Kendall loop and the East/West SOCAT plots below need;
+# without them the script stops with a KeyError.
+# NOTE: as written, East temp uses the GAM and everything else here uses the
+# day-of-year climatology (compute_seasonal_trend), while ship_surface uses
+# the GAM for all variables. Worth making these consistent for the chapter.
+east = compute_seasonal_trend_gam(east, 'temp')
+east = compute_seasonal_trend(east, 'sal')
+east = compute_seasonal_trend(east, 'pco2')
 
-# west = compute_seasonal_trend(west, 'temp')
-# west = compute_seasonal_trend(west, 'sal')
-# west = compute_seasonal_trend(west, 'pco2')
+west = compute_seasonal_trend(west, 'temp')
+west = compute_seasonal_trend(west, 'sal')
+west = compute_seasonal_trend(west, 'pco2')
 
-# stetson = compute_seasonal_trend(stetson, 'temp')
-# stetson = compute_seasonal_trend(stetson, 'sal')
-# stetson = compute_seasonal_trend(stetson, 'pco2')
+stetson = compute_seasonal_trend(stetson, 'temp')
+stetson = compute_seasonal_trend(stetson, 'sal')
+stetson = compute_seasonal_trend(stetson, 'pco2')
 
 # Shipboard surface
 ship_surface = ship[ship['Depth'] == 'S'].copy()
@@ -665,7 +690,10 @@ ship_surface = compute_seasonal_trend_gam(ship_surface, 'aragonite')
 ship_surface = compute_seasonal_trend_gam(ship_surface, 'total alkalinity')
 
 # # HOBO logger trends (example for East)
-# df_east = compute_seasonal_trend(hobo_east, 'Temp_E')
+# UNCOMMENTED (Claude): df_east is used by the Mann-Kendall loop and the
+# "East Bank HOBO" plot below; without this line the script stops with a
+# NameError. NOTE: East uses the climatology method, West uses the GAM.
+df_east = compute_seasonal_trend(hobo_east, 'Temp_E')
 df_west = compute_seasonal_trend_gam(hobo_west, 'Temp_W')
 
 # %%  Apply Trend Calculations to Each Dataset

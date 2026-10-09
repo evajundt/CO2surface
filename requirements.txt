@@ -9,3 +9,5 @@ esda
 libpysal
 statsmodels
 pygam
+pymannkendall
+scikit-learn
