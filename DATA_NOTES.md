@@ -16,6 +16,8 @@ fix happens at load time.
 |---|---|
 | East (`Date`) and West (`Date.1`) date columns **don't line up row by row**: from row 2922 West is one year ahead (2002-01-01 next to 2003-01-01) | Each site read with its own date column, never paired by row |
 | Reef-cap loggers at roughly 20 m depth, not surface | Kept as a separate `ReefLogger` source, not mixed with surface temperature |
+| West has **2023-01-01 to 2023-01-10 entered twice** (rows 9862-9871 and 10227-10236, identical values) | Averaged to one value per day in `load_reef_loggers` and `ch3_trends.py` |
+| Many partial years (e.g. East 1996: 3 months; 1998-2001 and 2007 missing) | Annual-mean trend tests use only years with data in >= 9 of 12 months |
 | Logger positions not in file | Approximate EFG/WFG reef-cap positions used (`LOGGER_SITES`); replace if you have exact ones |
 
 ## socat head.csv (older SOCAT export, cut short)

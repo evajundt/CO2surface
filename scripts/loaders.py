@@ -81,6 +81,9 @@ def load_reef_loggers(path):
     parts = []
     for site, meta in LOGGER_SITES.items():
         d = raw[[meta["date_col"], meta["temp_col"]]].dropna()
+        # Fix: West has 2023-01-01..10 entered twice (identical values);
+        # keep one value per day.
+        d = d.groupby(meta["date_col"], as_index=False)[meta["temp_col"]].mean()
         parts.append(pd.DataFrame({
             "Date": pd.to_datetime(d[meta["date_col"]]),
             "Latitude": meta["Latitude"],

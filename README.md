@@ -15,8 +15,9 @@ Mexican border, extended east to include the Flower Garden Banks).
   Results in `outputs/spatial_<cell>deg/report.md`
 - `scripts/seasonal.py` – Eva's `compute_seasonal_trend_gam` (pyGAM, cyclic DOY + time spline) adapted for
   the spatial analysis; changes from the original are listed at the top of the file
-- `scripts/ch3_trends.py` – per-year long-term trends for the ch3 datasets (ship surface, HOBO East/West),
-  replacing the per-sample slopes from `plot_anomaly_with_trend`; writes `outputs/ch3_trends/`
+- `scripts/ch3_trends.py` – per-year long-term trends for the ch3 datasets (ship surface, HOBO East/West):
+  seasonal cycle removed, annual means, Hamed-Rao Mann-Kendall + Sen's slope, for the full record,
+  2007-present and the ship window (Nov 2013 - Aug 2023). No IQR cleaning. Writes `outputs/ch3_trends/`
 - `reference/fianlch3analysis.py` – Eva's ch3 analysis script. Edits are marked `CHANGED (Claude)`,
   `UNCOMMENTED (Claude)` or `NOTE (Claude)`: RMSE call updated for scikit-learn 1.6+, the
   east/west/stetson and df_east trend lines uncommented, and the trend-unit issues flagged
