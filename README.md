@@ -13,6 +13,9 @@ Mexican border, extended east to include the Flower Garden Banks).
   anomalies (all data), salinity justification tests, then freshwater removal (S < 25/30/33) and
   LOWESS salinity adjustment, plus a cruise-centred check; compares them (Cohen's kappa).
   Results in `outputs/spatial_<cell>deg/report.md`
+- `scripts/seasonal.py` – Eva's `compute_seasonal_trend_gam` (pyGAM, cyclic DOY + time spline) adapted for
+  the spatial analysis; changes from the original are listed at the top of the file
+- `reference/fianlch3analysis.py` – Eva's original ch3 analysis script, kept unchanged for reference
 - `DATA_NOTES.md` – log of problems found in each raw file and how they're handled
 
 Raw data lives in `data/raw/`:
@@ -28,4 +31,6 @@ python scripts/subset_socat.py <full_socat_file> data/raw/socat_nwgom.tsv.gz
 python scripts/run_coverage.py
 python scripts/spatial_grouping.py                 # 0.1-degree cells
 python scripts/spatial_grouping.py --cell 0.25     # coarser sensitivity run
+python scripts/spatial_grouping.py --seasonal harmonic   # earlier simple seasonal fit, for comparison
+python scripts/spatial_grouping.py --iqr-clean           # also drop 3x-IQR anomaly outliers
 ```

@@ -7,9 +7,11 @@ Planned two-stage analysis (run separately for each variable):
      is one "visit" (mean of its points). This removes the along-track
      redundancy: consecutive points ~0.2 km apart are not independent
      samples and would make Moran's I significant almost by default.
-  2. Remove the seasonal cycle and long-term trend (harmonic regression on
-     visits), so that "location" is not just "the month/year a cruise
-     happened to pass there". Analysis is on the anomalies.
+  2. Remove the seasonal cycle and long-term trend with Eva's GAM
+     (seasonal.compute_seasonal_trend_gam, fitted on visits), so that
+     "location" is not just "the month/year a cruise happened to pass
+     there". Analysis is on the anomalies. --seasonal harmonic gives the
+     earlier simpler fit for comparison.
   3. STAGE 1 - all data: global Moran's I + LISA (local clusters, FDR-corrected).
   4. JUSTIFICATION - do the LISA clusters coincide with low-salinity water?
      (Kruskal-Wallis / Mann-Whitney on salinity by cluster type, chi-square of
@@ -46,6 +48,7 @@ import esda
 from libpysal.weights import DistanceBand
 
 from loaders import load_socat
+from seasonal import compute_seasonal_trend_gam, iqr_outliers
 from nwgom_coverage_check import DOMAIN
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -262,9 +265,17 @@ def main():
     ap.add_argument("--cell", type=float, default=0.1, help="grid cell size (degrees)")
     ap.add_argument("--band-km", type=float, default=None,
                     help="neighbour distance; default 2.5 cells")
+    ap.add_argument("--seasonal", choices=["gam", "harmonic"], default="gam",
+                    help="gam = Eva's compute_seasonal_trend_gam (default); "
+                         "harmonic = the earlier 2-harmonic + linear trend fit")
+    ap.add_argument("--iqr-clean", action="store_true",
+                    help="drop visits whose anomaly is a 3x IQR outlier (off by default: "
+                         "it also removes plume water, and SOCAT is already QC'd)")
     args = ap.parse_args()
     band_km = args.band_km or 2.5 * args.cell * 111.0
-    out = ROOT / "outputs" / f"spatial_{args.cell:g}deg"
+    suffix = "" if args.seasonal == "gam" else f"_{args.seasonal}"
+    suffix += "_iqrclean" if args.iqr_clean else ""
+    out = ROOT / "outputs" / f"spatial_{args.cell:g}deg{suffix}"
     out.mkdir(parents=True, exist_ok=True)
 
     df = load_socat(args.socat)
@@ -277,11 +288,30 @@ def main():
 
     rows, notes = [], []
     for var, label in VARIABLES.items():
-        anom, fit = deseasonalize(visits, var)
+        if args.seasonal == "gam":
+            # Eva's GAM (cyclic DOY spline + time spline), fitted on visits
+            # so a cruise with 10,000 points doesn't outweigh one with 200
+            fitted, fit = compute_seasonal_trend_gam(visits, var)
+            anom = fitted[f"Anomaly_{var}"].to_numpy()
+            method = "GAM (compute_seasonal_trend_gam, decimal-year time axis)"
+        else:
+            anom, fit = deseasonalize(visits, var)
+            method = "2-harmonic + linear trend"
+        n_iqr = 0
+        if args.iqr_clean:
+            bad = iqr_outliers(anom)
+            n_iqr = int(bad.sum())
+            anom = np.where(bad, np.nan, anom)
         visits[f"{var}_anom"] = anom
-        notes.append(f"## {var}\n\nSeasonal+trend fit on visits: trend "
-                     f"{fit['trend_per_yr']:+.2f}/yr, annual amplitude "
-                     f"{fit['seasonal_amplitude']:.2f}, R^2 {fit['r2']:.2f}\n")
+        notes.append(f"## {var}\n\nSeasonal+trend removal: {method}, fitted on visits. "
+                     f"Trend {fit['trend_per_yr']:+.2f}/yr, seasonal amplitude "
+                     f"{fit['seasonal_amplitude']:.2f}, R^2 {fit['r2']:.2f}"
+                     + (f"; {n_iqr} visits dropped as 3x IQR anomaly outliers" if args.iqr_clean else "")
+                     + "\n")
+        if "monthly_mean_anomaly" in fit:
+            notes.append("Residual seasonality check (mean anomaly by month; ~0 means the cycle "
+                         "was removed): " + ", ".join(f"{m}: {a:+.1f}" for m, a in
+                                                      fit["monthly_mean_anomaly"].items()) + "\n")
 
         results = {}
         # Stage 1: all data
@@ -379,6 +409,8 @@ def main():
     table_md = summary[cols].to_markdown(index=False, floatfmt=".3f")
     report = (f"# Spatial grouping results ({args.cell:g} deg cells)\n\n"
               f"Input: {len(df):,} SOCAT points in DOMAIN -> {len(visits):,} cruise-cell visits. "
+              f"Seasonal removal: {args.seasonal}"
+              f"{' + anomaly IQR cleaning' if args.iqr_clean else ''}. "
               f"Neighbours: distance band {band_km:.1f} km, row-standardised. "
               f"{PERMUTATIONS} permutations; LISA FDR alpha {FDR_ALPHA}.\n\n"
               f"## Moran's I by scenario\n\n{table_md}\n\n" + "\n".join(notes))
