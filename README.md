@@ -16,8 +16,9 @@ Mexican border, extended east to include the Flower Garden Banks).
 - `scripts/seasonal.py` – Eva's `compute_seasonal_trend_gam` (pyGAM, cyclic DOY + time spline) adapted for
   the spatial analysis; changes from the original are listed at the top of the file
 - `scripts/ch3_trends.py` – per-year long-term trends for the ch3 datasets (ship surface, HOBO East/West):
-  seasonal cycle removed, annual means, Hamed-Rao Mann-Kendall + Sen's slope, for the full record,
-  2007-present and the ship window (Nov 2013 - Aug 2023). No IQR cleaning. Writes `outputs/ch3_trends/`
+  seasonal cycle removed, annual means, Mann-Kendall (more cautious of plain and Hamed-Rao p) + Sen's
+  slope, for the full record, 2007-present and the ship window (Nov 2013 - Aug 2023). Ship depth sets
+  via `--ship-depths S M B all` (all = per-cast water-column mean). No IQR cleaning. Writes `outputs/ch3_trends/`
 - `reference/fianlch3analysis.py` – Eva's ch3 analysis script. Edits are marked `CHANGED (Claude)`,
   `UNCOMMENTED (Claude)` or `NOTE (Claude)`: RMSE call updated for scikit-learn 1.6+, the
   east/west/stetson and df_east trend lines uncommented, and the trend-unit issues flagged
@@ -38,5 +39,6 @@ python scripts/spatial_grouping.py                 # 0.1-degree cells
 python scripts/spatial_grouping.py --cell 0.25     # coarser sensitivity run
 python scripts/spatial_grouping.py --seasonal harmonic   # earlier simple seasonal fit, for comparison
 python scripts/spatial_grouping.py --iqr-clean           # also drop 3x-IQR anomaly outliers
-python scripts/ch3_trends.py                              # per-year ch3 trends
+python scripts/ch3_trends.py                              # per-year ch3 trends (all ship depth sets)
+python scripts/ch3_trends.py --ship-depths S all          # surface vs whole water column only
 ```

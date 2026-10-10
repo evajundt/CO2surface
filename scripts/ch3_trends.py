@@ -13,15 +13,21 @@ Steps for each dataset, variable and period:
      autocorrelated, so treating ~9,000 days as independent made p-values
      absurdly small (~1e-250). Only reasonably complete years are used
      (HOBO: data in >= 9 of 12 months; ship: >= 3 samples).
-  3. Hamed-Rao modified Mann-Kendall test on the annual means (corrects the
-     test's variance for any remaining autocorrelation between years) with
-     Sen's slope as the trend estimate.
+  3. Mann-Kendall test on the annual means, with Sen's slope as the trend
+     estimate. Both the plain test and the Hamed-Rao modified test (which
+     corrects for autocorrelation between years) are run; the reported
+     annual_mk_p is the LARGER of the two, because with ~10 years Hamed-Rao
+     can estimate negative autocorrelation and make p smaller than it should.
   The ordinary regression on all samples is also reported, for reference
   only; its p-value is NOT autocorrelation-corrected.
 
 Periods: full record, 2007-present (~last 15+ years), and the ship-sampling
 window (Nov 2013 - Aug 2023) so the loggers can be compared like-for-like
 with the ship bottles.
+
+Ship depth sets (--ship-depths): surface (S), mid (M), bottom (B), and
+"all" = one water-column value per cast (mean of S, M and B; complete casts
+only). Default runs all four so surface can be compared with the full column.
 
 Cleaning: fill values (-999/999) only. The 3x IQR rule from
 clean_oceanography_data is NOT applied: it removes real extremes.
@@ -66,7 +72,32 @@ PERIOD_STYLE = {"full record": dict(color="#1c5aa8", ls="-"),
                 "ship window 2013-11 to 2023-08": dict(color="#3d3c39", ls=":")}
 
 
-def load():
+SHIP_DEPTH_SETS = {
+    "S": "Ship surface",
+    "M": "Ship mid-depth",
+    "B": "Ship bottom",
+    "all": "Ship all depths (cast mean)",
+}
+
+
+def ship_depth_set(ship, cols, key):
+    """
+    One ship dataset for a depth choice.
+
+    S / M / B: bottles from that depth only (S ~1.6 dbar, M ~10, B ~19 median).
+    all: one value per cast = mean of its S, M and B bottles. Only casts with
+    all three depths are used (84 of 92), so a cast with only a bottom bottle
+    can't pull a year's mean towards bottom-water values, and one cast counts
+    once rather than as three independent samples.
+    """
+    if key in ("S", "M", "B"):
+        return ship[ship["Depth"] == key]
+    depths = ship.groupby(["Station", "Date"])["Depth"].transform(lambda d: "".join(sorted(set(d))))
+    complete = ship[depths == "BMS"]
+    return (complete.groupby(["Station", "Date"], as_index=False)[cols].mean())
+
+
+def load(ship_depths=("S", "all")):
     """Returns [(dataset name, DataFrame with Date + variables, variables, kind)]."""
     ship = pd.read_excel(RAW / "shipto2023.xlsx").rename(columns={
         "CTD temp": "temp", "CTD Sal": "sal", "pCO2": "pco2",
@@ -75,7 +106,8 @@ def load():
     ship_cols = ["temp", "sal", "pco2", "pH", "aragonite", "total alkalinity"]
     for c in ship_cols:
         ship[c] = pd.to_numeric(ship[c], errors="coerce").replace(FILL_VALUES, np.nan)
-    ship = ship[ship["Depth"] == "S"]
+    ships = [(SHIP_DEPTH_SETS[k], ship_depth_set(ship, ship_cols, k), ship_cols, "ship")
+             for k in ship_depths]
 
     h = pd.read_excel(RAW / "Temp E_W_1989-2024_1sheet.xlsx")
     loggers = []
@@ -88,7 +120,7 @@ def load():
         # average to one value per day so those days aren't double-weighted.
         d = d.groupby("Date", as_index=False)[var].mean()
         loggers.append((name, d, [var], "logger"))
-    return [("Ship surface", ship, ship_cols, "ship")] + loggers
+    return ships + loggers
 
 
 def in_period(df, start, end):
@@ -129,6 +161,16 @@ def analyse(name, df, col, kind, period, start, end):
            "years_used": len(used), "years_dropped_incomplete": int((~keep).sum())}
     if len(used) >= 4:
         r = mk.hamed_rao_modification_test(used["mean"].to_numpy())
+        o = mk.original_test(used["mean"].to_numpy())
+        # Fix: with ~10 annual means, Hamed-Rao sometimes estimates NEGATIVE
+        # year-to-year autocorrelation and SHRINKS the variance, giving a
+        # smaller p than the plain test (e.g. ship bottom pCO2: 7e-9 vs 3e-3;
+        # bottom temp: 0.023 vs 0.16). The correction is meant to guard
+        # against positive autocorrelation, so the reported p is the larger
+        # (more cautious) of the two.
+        p_final = max(r.p, o.p)
+        trend_final = ("no trend" if p_final >= 0.05 else
+                       "increasing" if o.s > 0 else "decreasing")
         yrs = used.index.to_numpy(float)
         ts = pd.Series(used["mean"].to_numpy(), index=yrs)
         # Sen's slope on (year, value) pairs - correct even if years are missing
@@ -138,8 +180,9 @@ def analyse(name, df, col, kind, period, start, end):
         ann_ols = trend_per_year(pd.to_datetime(used.index.astype(int).astype(str) + "-07-02"),
                                  used["mean"])
         row.update({"annual_sen_slope_per_yr": sen_yr,
-                    "annual_mk_hamed_rao_trend": r.trend, "annual_mk_hamed_rao_p": r.p,
-                    "annual_mk_tau": r.Tau,
+                    "annual_mk_p": p_final, "annual_mk_trend": trend_final,
+                    "annual_mk_original_p": o.p, "annual_mk_hamed_rao_p": r.p,
+                    "annual_mk_tau": o.Tau,
                     "annual_ols_slope_per_yr": ann_ols["slope_per_yr"],
                     "annual_ols_stderr_per_yr": ann_ols["stderr_per_yr"],
                     "years_list": " ".join(str(y) for y in used.index)})
@@ -168,14 +211,14 @@ def plot(name, col, runs, path):
         # Sen line through the median point (standard Sen intercept)
         b = np.median(u["mean"].to_numpy() - row["annual_sen_slope_per_yr"] * yrs)
         xs = np.array([yrs.min(), yrs.max()])
-        p = row["annual_mk_hamed_rao_p"]
+        p = row["annual_mk_p"]
         p_str = "p < 0.001" if p < 0.001 else f"p = {p:.3f}"
         ax.plot(pd.to_datetime([f"{int(x)}-07-02" for x in xs]),
                 row["annual_sen_slope_per_yr"] * xs + b, lw=2, zorder=4,
                 label=f"{period}: {row['annual_sen_slope_per_yr']:+.3f} "
                       f"{UNITS.get(col, '')}/yr ({p_str})", **PERIOD_STYLE[period])
     ax.set_ylabel(f"{col} (seasonal cycle removed)")
-    ax.set_title(f"{name}: {col} - Sen's slope on annual means, Hamed-Rao Mann-Kendall",
+    ax.set_title(f"{name}: {col} - Sen's slope on annual means, Mann-Kendall p",
                  fontsize=11)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
@@ -186,9 +229,16 @@ def plot(name, col, runs, path):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ship-depths", nargs="+", default=["S", "M", "B", "all"],
+                    choices=list(SHIP_DEPTH_SETS),
+                    help="ship depth sets to analyse: S, M, B and/or all "
+                         "(all = per-cast mean of S, M and B). Default: all four")
+    args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     rows, anns = [], []
-    for name, df, cols, kind in load():
+    for name, df, cols, kind in load(args.ship_depths):
         for col in cols:
             runs = {}
             for period, (start, end) in PERIODS.items():
@@ -207,7 +257,7 @@ def main():
     res.to_csv(OUT / "trends.csv", index=False)
     pd.concat(anns).to_csv(OUT / "annual_means.csv", index=False)
     show = ["dataset", "variable", "period", "years_used", "annual_sen_slope_per_yr",
-            "annual_mk_hamed_rao_p", "annual_mk_hamed_rao_trend",
+            "annual_mk_p", "annual_mk_trend",
             "sample_regression_slope_per_yr", "note"]
     with pd.option_context("display.float_format", "{:.4g}".format, "display.width", 250,
                            "display.max_colwidth", 50):
