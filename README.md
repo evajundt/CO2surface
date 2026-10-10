@@ -15,10 +15,12 @@ Mexican border, extended east to include the Flower Garden Banks).
   Results in `outputs/spatial_<cell>deg/report.md`
 - `scripts/seasonal.py` – Eva's `compute_seasonal_trend_gam` (pyGAM, cyclic DOY + time spline) adapted for
   the spatial analysis; changes from the original are listed at the top of the file
-- `scripts/regions.py` – data-driven surface regions and their long-term rates (SOCAT): stage 1 separates
-  fresh-influenced cells (any visit S < 25), stage 2 splits the marine shelf with SKATER (contiguous,
-  >= 8 cells, k by a fixed rule), then per-region Sen's slope + Mann-Kendall and an ANCOVA test of
-  whether the rates differ. Writes `outputs/regions_<cell>deg/`
+- `scripts/regions.py` – surface regions and their long-term rates (SOCAT). Default `--mode physical`:
+  regions defined without pCO2/temperature - stage 1 fresh-influenced cells (any visit S < 25), stage 2
+  SKATER on water depth, distance to land and longitude (contiguous, >= 8 cells, k by a fixed rule);
+  one set of regions for both variables; per-region Sen's slope + Mann-Kendall, ANCOVA test of whether
+  rates differ, and a validation against regions clustered on each variable (`--mode response`).
+  Writes `outputs/regions_physical_<cell>deg/` (and `outputs/regions_<cell>deg/` for the comparison)
 - `scripts/ch3_trends.py` – per-year long-term trends for the ch3 datasets (ship surface, HOBO East/West):
   seasonal cycle removed, annual means, Mann-Kendall (more cautious of plain and Hamed-Rao p) + Sen's
   slope, for the full record, 2007-present and the ship window (Nov 2013 - Aug 2023). Ship depth sets
@@ -43,7 +45,8 @@ python scripts/spatial_grouping.py                 # 0.1-degree cells
 python scripts/spatial_grouping.py --cell 0.25     # coarser sensitivity run
 python scripts/spatial_grouping.py --seasonal harmonic   # earlier simple seasonal fit, for comparison
 python scripts/spatial_grouping.py --iqr-clean           # also drop 3x-IQR anomaly outliers
-python scripts/regions.py                                 # data-driven regions + rates (0.25 deg)
+python scripts/regions.py                                 # physical regions + rates (0.25 deg)
+python scripts/regions.py --mode response                 # regions clustered on pCO2 / temp (comparison)
 python scripts/ch3_trends.py                              # per-year ch3 trends (all ship depth sets)
 python scripts/ch3_trends.py --ship-depths S all          # surface vs whole water column only
 ```
