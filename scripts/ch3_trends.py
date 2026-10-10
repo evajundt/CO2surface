@@ -168,7 +168,7 @@ def analyse(name, df, col, kind, period, start, end):
         # bottom temp: 0.023 vs 0.16). The correction is meant to guard
         # against positive autocorrelation, so the reported p is the larger
         # (more cautious) of the two.
-        p_final = max(r.p, o.p)
+        p_final = float(np.nanmax([r.p, o.p]))   # Hamed-Rao can return NaN
         trend_final = ("no trend" if p_final >= 0.05 else
                        "increasing" if o.s > 0 else "decreasing")
         yrs = used.index.to_numpy(float)
